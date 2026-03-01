@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 const { STORE_KEYS } = require("./storeModel");
 
 // קבוצות קטגוריות כדי שנוכל לעשות חיפוש top/bottom/shoes
-const CATEGORY_GROUPS = ["top", "bottom", "shoes", "other"];
+const CATEGORY_GROUPS = ["top","tops", "bottom", "shoes", "other"];
 const GENDERS = ["women"]; // כרגע רק נשים
 
 const productSchema = new mongoose.Schema(
