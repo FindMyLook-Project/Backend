@@ -1,8 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Product = require('../models/productModel');
-// אופציונלי: axios לצורך פנייה לשרת ה-Python
-// const axios = require('axios'); 
+const axios = require('axios'); 
 
 router.post('/visual-search', async (req, res) => {
   try {
@@ -12,31 +11,52 @@ router.post('/visual-search', async (req, res) => {
       return res.status(400).json({ error: "Image and at least one crop are required" });
     }
 
-    // שלב 1: שליחה ל-ML Service (Python) כדי לקבל Embeddings לכל חיתוך
-    // בינתיים אנחנו מדמים את התשובה (Mock) לצורך ה-POC
     const resultsPerCrop = await Promise.all(crops.map(async (crop, index) => {
       
-      // כאן בעתיד תבוא הקריאה לשרת ה-Python:
-      // const mlResponse = await axios.post(process.env.ML_URL, { image, crop });
-      // const embedding = mlResponse.data.embedding;
-
-      // שלב 2: חיפוש וקטורי ב-MongoDB (באמצעות Vector Search) או FAISS
-      // כרגע נשלוף מוצרים רלוונטיים לפי המסננים שהמשתמש בחר (Price, Store)
-      const query = {
-        price: { $lte: filters.priceRange || 2000 },
-        isAvailable: true
-      };
-
-      if (filters.preferredStores && filters.preferredStores.length > 0) {
-        query.storeName = { $in: filters.preferredStores.map(s => s.toLowerCase()) };
+      // שלב 1: שליחה לשרת הפייתון לקבלת Embedding אמיתי עבור החיתוך
+      // נניח ששרת הפייתון שלך רץ ומוכן לקבל את ה-Crop
+      let embedding = [];
+      try {
+        const mlResponse = await axios.post(process.env.ML_URL || "http://localhost:8000/process-look", { 
+          image: image, 
+          crop: crop 
+        });
+        embedding = mlResponse.data.items[0].embedding;
+      } catch (mlErr) {
+        console.error("ML Service Error:", mlErr.message);
+        // אם ה-ML נכשל, נחזיר מערך ריק לחיתוך הזה
+        return { cropIndex: index, results: [] };
       }
 
-      // שליפת מוצרים (בינתיים לפי פילטרים בלבד, ללא וקטורים עדיין)
-      const products = await Product.find(query).limit(5).populate('storeId');
+      // שלב 2: חיפוש וקטורי ב-MongoDB Atlas
+      const results = await Product.aggregate([
+        {
+          $vectorSearch: {
+            index: "vector_index",
+            path: "imageEmbedding",
+            queryVector: embedding,
+            numCandidates: 100, // MongoDB בודק 100 מועמדים קרובים
+            // limit: 10 // ומחזיר את ה-10 הכי קרובים
+
+          }
+        },
+        {
+          $addFields: {
+      // הוספת הציון ש-MongoDB נתן לכל תוצאה
+         searchScore: { $meta: "vectorSearchScore" } 
+        }
+      },
+      {
+    // כאן את מגדירה את ה-Threshold!
+       $match: {
+        searchScore: { $gte: 0.6 } // רק תוצאות עם דמיון של 70% ומעלה
+        }
+      }
+    ]);
 
       return {
         cropIndex: index,
-        originalCrop: crop, // הקואורדינטות של החיתוך
+        originalCrop: crop,
         results: products
       };
     }));
