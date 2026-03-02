@@ -2,68 +2,64 @@ const express = require('express');
 const router = express.Router();
 const Product = require('../models/productModel');
 const axios = require('axios'); 
+const ML_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 
 router.post('/visual-search', async (req, res) => {
   try {
-    const { image, crops, filters } = req.body;
+    const { images, filters } = req.body; 
 
-    if (!image || !crops || crops.length === 0) {
-      return res.status(400).json({ error: "Image and at least one crop are required" });
+    if (!images || !Array.isArray(images) || images.length === 0) {
+      return res.status(400).json({ error: "At least one cropped image is required" });
     }
 
-    const resultsPerCrop = await Promise.all(crops.map(async (crop, index) => {
+    const resultsPerItem = await Promise.all(images.map(async (base64Image, index) => {
       
-      // שלב 1: שליחה לשרת הפייתון לקבלת Embedding אמיתי עבור החיתוך
-      // נניח ששרת הפייתון שלך רץ ומוכן לקבל את ה-Crop
       let embedding = [];
       try {
-        const mlResponse = await axios.post(process.env.ML_URL || "http://localhost:8000/process-look", { 
-          image: image, 
-          crop: crop 
+        const mlResponse = await axios.post(process.env.ML_URL || `${ML_URL}/process-look`, { 
+          image: base64Image 
         });
         embedding = mlResponse.data.items[0].embedding;
       } catch (mlErr) {
-        console.error("ML Service Error:", mlErr.message);
-        // אם ה-ML נכשל, נחזיר מערך ריק לחיתוך הזה
-        return { cropIndex: index, results: [] };
+        console.error(`ML Service Error on item ${index}:`, mlErr.message);
+        return { itemIndex: index, results: [] };
       }
 
-      // שלב 2: חיפוש וקטורי ב-MongoDB Atlas
-      const results = await Product.aggregate([
+      const products = await Product.aggregate([
         {
           $vectorSearch: {
             index: "vector_index",
             path: "imageEmbedding",
             queryVector: embedding,
-            numCandidates: 100, // MongoDB בודק 100 מועמדים קרובים
-            // limit: 10 // ומחזיר את ה-10 הכי קרובים
-
+            numCandidates: 200,
+            limit: 10,
+            filter: {
+              categoryGroup: { $eq: labelFromYolo } 
+             }
           }
         },
         {
           $addFields: {
-      // הוספת הציון ש-MongoDB נתן לכל תוצאה
-         searchScore: { $meta: "vectorSearchScore" } 
+            searchScore: { $meta: "vectorSearchScore" } 
+          }
+        },
+        {
+          $match: {
+            searchScore: { $gte: 0.7 }, // Threshold 
+            price: { $lte: Number(filters?.priceRange) || 2000 }
+          }
         }
-      },
-      {
-    // כאן את מגדירה את ה-Threshold!
-       $match: {
-        searchScore: { $gte: 0.6 } // רק תוצאות עם דמיון של 70% ומעלה
-        }
-      }
-    ]);
+      ]);
 
       return {
-        cropIndex: index,
-        originalCrop: crop,
+        itemIndex: index,
         results: products
       };
     }));
 
     res.status(200).json({
       success: true,
-      data: resultsPerCrop
+      data: resultsPerItem
     });
 
   } catch (error) {
