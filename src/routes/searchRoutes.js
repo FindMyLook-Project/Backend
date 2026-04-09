@@ -4,20 +4,41 @@ const Product = require('../models/productModel');
 const axios = require('axios'); 
 const ML_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 
+const CATEGORY_MAP = {
+  top: [
+    'tops', 'blouses', 'bodysuits', 'coats', 'jackets', 
+    'knitwear', 'outerwear', 'sweatshirts', 'dresses', 
+    'dresses_and_overalls', 'dresses_and_skirts', 
+    'suits', 'basics', 'casual', 'activewear'
+  ],
+  bottom: [
+    'bottoms', 'jeans', 'trousers', 'shorts', 'skirts', 
+    'dresses_and_skirts', 'overalls', 'suits', 
+    'basics', 'casual', 'activewear'
+  ],
+  shoes: [
+    'shoes', 'shoes_general', 'sneakers', 'boots', 
+    'ankle_boots', 'flats', 'heels', 'leather_shoes'
+  ]
+};
+
 router.post('/visual-search', async (req, res) => {
   try {
-    const { images, filters } = req.body; 
+    const { items, filters } = req.body; 
 
-    if (!images || !Array.isArray(images) || images.length === 0) {
-      return res.status(400).json({ error: "At least one cropped image is required" });
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "At least one item is required" });
     }
 
-    const resultsPerItem = await Promise.all(images.map(async (base64Image, index) => {
+    const resultsPerItem = await Promise.all(items.map(async (itemData, index) => {
       
       let embedding = [];
+      const userSelectedCategory = itemData.category; 
+      const allowedCategories = CATEGORY_MAP[userSelectedCategory] || [];
+
       try {
-        const mlResponse = await axios.post(process.env.ML_URL || `${ML_URL}/process-look`, { 
-          image: base64Image 
+        const mlResponse = await axios.post(process.env.ML_URL || `${ML_URL}/process-look-base64`, { 
+          image: itemData.image 
         });
         embedding = mlResponse.data.items[0].embedding;
       } catch (mlErr) {
@@ -34,8 +55,8 @@ router.post('/visual-search', async (req, res) => {
             numCandidates: 200,
             limit: 10,
             filter: {
-              categoryGroup: { $eq: labelFromYolo } 
-             }
+              categoryGroup: { $in: allowedCategories } 
+            }
           }
         },
         {
@@ -45,7 +66,7 @@ router.post('/visual-search', async (req, res) => {
         },
         {
           $match: {
-            searchScore: { $gte: 0.7 }, // Threshold 
+            searchScore: { $gte: 0.8 }, // רף גבוה לתוצאות מדויקות בלבד
             price: { $lte: Number(filters?.priceRange) || 2000 }
           }
         }

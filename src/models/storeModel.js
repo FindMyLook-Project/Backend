@@ -9,6 +9,18 @@ const STORE_KEYS = [
   "hoodies",
   "bershka",
   "pullandbear",
+  "terminalx",
+  "story",
+  "addict",
+  "de_rococo",
+  "blueberry",
+  "brenda",
+  "studiopasha",
+  "fashionclub",
+  "missnori",
+  "fox",
+  "ata",
+  "golf",
 ];
 
 const storeSchema = new mongoose.Schema(

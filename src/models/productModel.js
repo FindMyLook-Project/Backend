@@ -11,9 +11,9 @@ const productSchema = new mongoose.Schema(
       ref: "Store",
       required: true,
     },
-    storeName: { type: String, required: true, enum: STORE_KEYS }, // גם string של החנות
+    storeName: { type: String, required: true, enum: STORE_KEYS }, 
 
-    externalId: { type: String, default: null },    // SKU/ID אם קיים באתר
+    externalId: { type: String, default: null },    
     productUrl: { type: String, required: true, unique: true },
 
     title: { type: String, required: true },
@@ -21,12 +21,11 @@ const productSchema = new mongoose.Schema(
     gender: { type: String, enum: GENDERS, default: "women" },
 
     categoryGroup: { type: String, enum: CATEGORY_GROUPS, required: true },
-    categoryFine: { type: String, default: "" },    // אופציונלי: tshirt, jeans וכו'
+    categoryFine: { type: String, default: "" },    
 
     price: { type: Number, required: true },
     currency: { type: String, default: "ILS" },
-    originalPrice: { type: Number, default: null }, // אם יש מחיר לפני הנחה
-
+    originalPrice: { type: Number, default: null }, 
     images: {
       type: [{ url: String, isPrimary: Boolean }],
       default: [],
