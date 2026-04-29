@@ -7,14 +7,17 @@ const ML_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 const CATEGORY_MAP = {
   top: [
     'tops', 'blouses', 'bodysuits', 'coats', 'jackets', 
-    'knitwear', 'outerwear', 'sweatshirts', 'dresses', 
-    'dresses_and_overalls', 'dresses_and_skirts', 
-    'suits', 'basics', 'casual', 'activewear'
+    'knitwear', 'outerwear', 'sweatshirts', 'basics', 'casual', 'activewear'
   ],
   bottom: [
-    'bottoms', 'jeans', 'trousers', 'shorts', 'skirts', 
-    'dresses_and_skirts', 'overalls', 'suits', 
+    'bottoms', 'jeans', 'trousers', 'shorts', 'overalls', 'suits', 
     'basics', 'casual', 'activewear'
+  ],
+  skirt: [
+    'skirts', 'dresses_and_skirts'
+  ],
+  dress: [
+    'dresses', 'dresses_and_overalls', 'dresses_and_skirts'
   ],
   shoes: [
     'shoes', 'shoes_general', 'sneakers', 'boots', 
@@ -33,6 +36,7 @@ router.post('/visual-search', async (req, res) => {
     const resultsPerItem = await Promise.all(items.map(async (itemData, index) => {
       
       let embedding = [];
+      let detectedColor = ""; 
       const userSelectedCategory = itemData.category; 
       const allowedCategories = CATEGORY_MAP[userSelectedCategory] || [];
 
@@ -41,12 +45,14 @@ router.post('/visual-search', async (req, res) => {
           image: itemData.image 
         });
         embedding = mlResponse.data.items[0].embedding;
+        detectedColor = mlResponse.data.items[0].color; 
       } catch (mlErr) {
         console.error(`ML Service Error on item ${index}:`, mlErr.message);
         return { itemIndex: index, results: [] };
       }
 
-      const products = await Product.aggregate([
+      
+      let products = await Product.aggregate([
         {
           $vectorSearch: {
             index: "vector_index",
@@ -54,23 +60,43 @@ router.post('/visual-search', async (req, res) => {
             queryVector: embedding,
             numCandidates: 200,
             limit: 10,
-            filter: {
-              categoryGroup: { $in: allowedCategories } 
-            }
+            filter: { categoryGroup: { $in: allowedCategories } }
           }
         },
-        {
-          $addFields: {
-            searchScore: { $meta: "vectorSearchScore" } 
-          }
-        },
+        { $addFields: { searchScore: { $meta: "vectorSearchScore" } } },
         {
           $match: {
-            searchScore: { $gte: 0.8 }, // רף גבוה לתוצאות מדויקות בלבד
-            price: { $lte: Number(filters?.priceRange) || 2000 }
+            searchScore: { $gte: 0.85 }, 
+            price: { $lte: Number(filters?.priceRange) || 2000 },
+            ...(detectedColor && detectedColor !== "other" ? { colors: { $in: [detectedColor] } } : {})
           }
         }
       ]);
+
+      
+      if (products.length === 0) {
+        console.log(`⚠️ No exact match for item ${index}. Falling back...`);
+        
+        products = await Product.aggregate([
+          {
+            $vectorSearch: {
+              index: "vector_index",
+              path: "imageEmbedding",
+              queryVector: embedding,
+              numCandidates: 200,
+              limit: 10,
+              filter: { categoryGroup: { $in: allowedCategories } }
+            }
+          },
+          { $addFields: { searchScore: { $meta: "vectorSearchScore" } } },
+          {
+            $match: {
+              searchScore: { $gte: 0.82 }, 
+              price: { $lte: Number(filters?.priceRange) || 2000 }
+            }
+          }
+        ]);
+      }
 
       return {
         itemIndex: index,
