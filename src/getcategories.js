@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const Product = require("./models/productModel"); // ודאי שהנתיב למודל נכון
+const Product = require("./models/productModel");
 require("dotenv").config();
 
 async function getAllCategories() {
@@ -7,7 +7,6 @@ async function getAllCategories() {
     await mongoose.connect(process.env.MONGO_URI);
     console.log("🚀 Connected to DB. Fetching categories...");
 
-    // הפונקציה הזו עוברת על כל המוצרים ומחזירה מערך של ערכים ייחודיים בלבד
     const uniqueCategories = await Product.distinct("categoryGroup");
     
     console.log("✅ Found the following unique categories in DB:");
