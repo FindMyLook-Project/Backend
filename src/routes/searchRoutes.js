@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Product = require('../models/productModel');
+const Store = require('../models/storeModel'); 
 const axios = require('axios'); 
 const ML_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 
@@ -51,7 +52,7 @@ router.post('/visual-search', async (req, res) => {
         return { itemIndex: index, results: [] };
       }
 
-      
+
       let products = await Product.aggregate([
         {
           $vectorSearch: {
@@ -68,12 +69,15 @@ router.post('/visual-search', async (req, res) => {
           $match: {
             searchScore: { $gte: 0.85 }, 
             price: { $lte: Number(filters?.priceRange) || 2000 },
-            ...(detectedColor && detectedColor !== "other" ? { colors: { $in: [detectedColor] } } : {})
+            ...(detectedColor && detectedColor !== "other" ? { colors: { $in: [detectedColor] } } : {}),
+            
+            ...(filters?.preferredStores && filters.preferredStores.length > 0 
+                ? { storeName: { $in: filters.preferredStores } } 
+                : {})
           }
         }
       ]);
 
-      
       if (products.length === 0) {
         console.log(`⚠️ No exact match for item ${index}. Falling back...`);
         
@@ -92,7 +96,10 @@ router.post('/visual-search', async (req, res) => {
           {
             $match: {
               searchScore: { $gte: 0.82 }, 
-              price: { $lte: Number(filters?.priceRange) || 2000 }
+              price: { $lte: Number(filters?.priceRange) || 2000 },
+              ...(filters?.preferredStores && filters.preferredStores.length > 0 
+                ? { storeName: { $in: filters.preferredStores } } 
+                : {})
             }
           }
         ]);
@@ -112,6 +119,45 @@ router.post('/visual-search', async (req, res) => {
   } catch (error) {
     console.error("Search Route Error:", error);
     res.status(500).json({ error: "Server error during visual search" });
+  }
+});
+
+
+router.get('/stores', async (req, res) => {
+  try {
+    const storesData = await Store.find({ isActive: true }, 'name key');
+    
+    const sortedStores = storesData
+      .map(storeDoc => ({ key: storeDoc.key, name: storeDoc.name }))
+      .filter(store => store.name && store.name.trim() !== '')
+      .sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));
+
+    res.status(200).json({
+      success: true,
+      data: sortedStores
+    });
+  } catch (error) {
+    console.error("Error fetching stores:", error);
+    res.status(500).json({ error: "Failed to fetch stores" });
+  }
+});
+
+router.get('/fix-db', async (req, res) => {
+  try {
+    const collection = Store.collection;
+    
+    const updateResult = await collection.updateMany(
+      { domain: { $exists: true } },
+      { $rename: { "domain": "baseUrl" } }
+    );
+
+    res.json({ 
+      success: true, 
+      message: "Database updated successfully (direct collection access)!",
+      modifiedCount: updateResult.modifiedCount
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
