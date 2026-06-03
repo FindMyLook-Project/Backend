@@ -3,6 +3,7 @@ const express = require("express");
 const connectDB = require("./config/db");
 const cors = require("cors");
 const searchRoutes = require("./routes/searchRoutes");
+const authRoutes = require("./routes/authRoutes");
 
 const app = express();
 
@@ -16,6 +17,7 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 app.use("/api/search", searchRoutes);
+app.use("/api/auth", authRoutes);
 
 connectDB();
 
