@@ -3,7 +3,12 @@ const router = express.Router();
 const Product = require('../models/productModel');
 const Store = require('../models/storeModel'); 
 const axios = require('axios'); 
-const ML_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
+const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
+const ML_PROCESS_LOOK_ENDPOINT =
+  process.env.ML_URL ||
+  (ML_SERVICE_URL.endsWith('/process-look-base64')
+    ? ML_SERVICE_URL
+    : `${ML_SERVICE_URL}/process-look-base64`);
 
 const CATEGORY_MAP = {
   top: [
@@ -25,6 +30,7 @@ const CATEGORY_MAP = {
     'ankle_boots', 'flats', 'heels', 'leather_shoes'
   ]
 };
+const LOOK_ALLOWED_CATEGORIES = [...new Set(Object.values(CATEGORY_MAP).flat())];
 
 router.post('/visual-search', async (req, res) => {
   try {
@@ -39,14 +45,21 @@ router.post('/visual-search', async (req, res) => {
       let embedding = [];
       let detectedColor = ""; 
       const userSelectedCategory = itemData.category; 
-      const allowedCategories = CATEGORY_MAP[userSelectedCategory] || [];
+      const allowedCategories = CATEGORY_MAP[userSelectedCategory] || LOOK_ALLOWED_CATEGORIES;
 
       try {
-        const mlResponse = await axios.post(process.env.ML_URL || `${ML_URL}/process-look-base64`, { 
+        const mlResponse = await axios.post(ML_PROCESS_LOOK_ENDPOINT, {
           image: itemData.image 
         });
-        embedding = mlResponse.data.items[0].embedding;
-        detectedColor = mlResponse.data.items[0].color; 
+
+        const mlItems = mlResponse?.data?.items;
+        if (!Array.isArray(mlItems) || mlItems.length === 0 || !mlItems[0]?.embedding) {
+          console.warn(`⚠️ ML returned no usable items for item ${index}`);
+          return { itemIndex: index, results: [] };
+        }
+
+        embedding = mlItems[0].embedding;
+        detectedColor = mlItems[0].color;
       } catch (mlErr) {
         console.error(`ML Service Error on item ${index}:`, mlErr.message);
         return { itemIndex: index, results: [] };
