@@ -5,6 +5,8 @@ const cors = require("cors");
 const searchRoutes = require("./routes/searchRoutes");
 const authRoutes = require("./routes/authRoutes");
 
+const profileRoutes = require("./routes/profileRoutes"); 
+
 const app = express();
 
 app.use(cors({
@@ -18,6 +20,8 @@ app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 app.use("/api/search", searchRoutes);
 app.use("/api/auth", authRoutes);
+
+app.use("/api/profile", profileRoutes); 
 
 connectDB();
 

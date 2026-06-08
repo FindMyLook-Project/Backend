@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Product = require('../models/productModel');
 const Store = require('../models/storeModel'); 
+const UserStyleProfile = require('../models/userStyleProfileModel');
 const axios = require('axios'); 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 const ML_PROCESS_LOOK_ENDPOINT =
@@ -34,10 +35,15 @@ const LOOK_ALLOWED_CATEGORIES = [...new Set(Object.values(CATEGORY_MAP).flat())]
 
 router.post('/visual-search', async (req, res) => {
   try {
-    const { items, filters } = req.body; 
+    const { items, filters, userId } = req.body; 
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "At least one item is required" });
+    }
+
+    let userProfile = null;
+    if (userId) {
+      userProfile = await UserStyleProfile.findOne({ userId });
     }
 
     const resultsPerItem = await Promise.all(items.map(async (itemData, index) => {
@@ -65,58 +71,75 @@ router.post('/visual-search', async (req, res) => {
         return { itemIndex: index, results: [] };
       }
 
+      const fetchFromMongo = async (minScore, applyColorFilter) => {
+        let matchStage = {
+          searchScore: { $gte: minScore },
+          price: { $lte: Number(filters?.priceRange) || 2000 }
+        };
 
-      let products = await Product.aggregate([
-        {
-          $vectorSearch: {
-            index: "vector_index",
-            path: "imageEmbedding",
-            queryVector: embedding,
-            numCandidates: 200,
-            limit: 10,
-            filter: { categoryGroup: { $in: allowedCategories } }
-          }
-        },
-        { $addFields: { searchScore: { $meta: "vectorSearchScore" } } },
-        {
-          $match: {
-            searchScore: { $gte: 0.85 }, 
-            price: { $lte: Number(filters?.priceRange) || 2000 },
-            ...(detectedColor && detectedColor !== "other" ? { colors: { $in: [detectedColor] } } : {}),
-            
-            ...(filters?.preferredStores && filters.preferredStores.length > 0 
-                ? { storeName: { $in: filters.preferredStores } } 
-                : {})
-          }
+        if (applyColorFilter && detectedColor && detectedColor !== "other") {
+          matchStage.colors = { $in: [detectedColor] };
         }
-      ]);
 
-      if (products.length === 0) {
-        console.log(`⚠️ No exact match for item ${index}. Falling back...`);
-        
-        products = await Product.aggregate([
+        if (filters?.preferredStores && filters.preferredStores.length > 0) {
+          matchStage.storeName = { $in: filters.preferredStores };
+        }
+
+        return await Product.aggregate([
           {
             $vectorSearch: {
               index: "vector_index",
               path: "imageEmbedding",
               queryVector: embedding,
               numCandidates: 200,
-              limit: 10,
+              limit: 30, 
               filter: { categoryGroup: { $in: allowedCategories } }
             }
           },
           { $addFields: { searchScore: { $meta: "vectorSearchScore" } } },
-          {
-            $match: {
-              searchScore: { $gte: 0.82 }, 
-              price: { $lte: Number(filters?.priceRange) || 2000 },
-              ...(filters?.preferredStores && filters.preferredStores.length > 0 
-                ? { storeName: { $in: filters.preferredStores } } 
-                : {})
-            }
-          }
+          { $match: matchStage }
         ]);
+      };
+
+      let products = await fetchFromMongo(0.85, true);
+
+      if (products.length === 0) {
+        console.log(`⚠️ No exact match for item ${index}. Falling back to 0.82 (without color filter)...`);
+        products = await fetchFromMongo(0.82, false);
       }
+
+      if (userProfile && userProfile.topStores && userProfile.topStores.length > 0) {
+        const favoriteStores = userProfile.topStores.map(store => store.toLowerCase());
+
+        products = products.map(product => {
+          let boost = 0;
+          let finalScore = product.searchScore;
+          
+          const pStore = product.storeName ? product.storeName.toLowerCase() : "";
+
+          if (favoriteStores.includes(pStore)) {
+            boost = 0.05;
+            finalScore += boost;
+          }
+
+          return {
+            ...product,
+            personalizationBoost: boost,
+            finalScore: finalScore
+          };
+        });
+
+        products.sort((a, b) => b.finalScore - a.finalScore);
+      } else {
+        products = products.map(product => ({
+          ...product,
+          personalizationBoost: 0,
+          finalScore: product.searchScore
+        }));
+      }
+
+      // חותכים ל-10 התוצאות הטובות ביותר
+      products = products.slice(0, 10);
 
       return {
         itemIndex: index,
@@ -126,6 +149,8 @@ router.post('/visual-search', async (req, res) => {
 
     res.status(200).json({
       success: true,
+      isPersonalized: !!userProfile, 
+      appliedStores: userProfile ? userProfile.topStores : [],
       data: resultsPerItem
     });
 
@@ -135,22 +160,27 @@ router.post('/visual-search', async (req, res) => {
   }
 });
 
+router.get('/random', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    const products = await Product.aggregate([{ $sample: { size: limit } }]);
+    res.status(200).json({ success: true, data: products });
+  } catch (error) {
+    console.error("Error fetching random products:", error);
+    res.status(500).json({ error: "Failed to fetch random products" });
+  }
+});
 
 router.get('/stores', async (req, res) => {
   try {
     const storesData = await Store.find({ isActive: true }, 'name key');
-    
     const sortedStores = storesData
       .map(storeDoc => ({ key: storeDoc.key, name: storeDoc.name }))
       .filter(store => store.name && store.name.trim() !== '')
       .sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));
 
-    res.status(200).json({
-      success: true,
-      data: sortedStores
-    });
+    res.status(200).json({ success: true, data: sortedStores });
   } catch (error) {
-    console.error("Error fetching stores:", error);
     res.status(500).json({ error: "Failed to fetch stores" });
   }
 });
@@ -158,20 +188,15 @@ router.get('/stores', async (req, res) => {
 router.get('/fix-db', async (req, res) => {
   try {
     const collection = Store.collection;
-    
     const updateResult = await collection.updateMany(
       { domain: { $exists: true } },
       { $rename: { "domain": "baseUrl" } }
     );
-
-    res.json({ 
-      success: true, 
-      message: "Database updated successfully (direct collection access)!",
-      modifiedCount: updateResult.modifiedCount
-    });
+    res.json({ success: true, message: "Database updated successfully", modifiedCount: updateResult.modifiedCount });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 module.exports = router;
+
