@@ -7,6 +7,11 @@ const userStyleProfileSchema = new mongoose.Schema({
     min: { type: Number, default: 0 },
     max: { type: Number, default: 2000 }
   },
+  storeScores: {
+    type: Map,
+    of: Number,
+    default: {}
+  },
   styleVector: { type: [Number], default: [] }, 
   lastUpdated: { type: Date, default: Date.now }
 });

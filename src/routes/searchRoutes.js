@@ -164,19 +164,28 @@ router.post('/visual-search', async (req, res) => {
         // If no embeddings were found in the documents, skip re-ranking silently
       }
 
-      if (userProfile && userProfile.topStores && userProfile.topStores.length > 0) {
-        const favoriteStores = userProfile.topStores.map(store => store.toLowerCase());
+      // ── Personalization & Dynamic Weighting ─────────────────────────────
+      if (userProfile) {
+        const favoriteStores = userProfile.topStores ? userProfile.topStores.map(s => s.toLowerCase()) : [];
+        const storeScores = userProfile.storeScores || new Map();
 
         products = products.map(product => {
           let boost = 0;
-          let finalScore = product.searchScore;
+          let finalScore = product.searchScore || 0;
           
           const pStore = product.storeName ? product.storeName.toLowerCase() : "";
+          
+          const activeScore = storeScores.get(pStore) || 0;
 
-          if (favoriteStores.includes(pStore)) {
+          if (activeScore > 0) {
+            boost = Math.min(activeScore * 0.01, 0.12);
+          } else if (activeScore < 0) {
+            boost = Math.max(activeScore * 0.02, -0.15);
+          } else if (favoriteStores.includes(pStore)) {
             boost = 0.05;
-            finalScore += boost;
           }
+
+          finalScore += boost;
 
           return {
             ...product,
@@ -194,7 +203,6 @@ router.post('/visual-search', async (req, res) => {
         }));
       }
 
-      // חותכים ל-10 התוצאות הטובות ביותר
       products = products.slice(0, 10);
 
       return {
