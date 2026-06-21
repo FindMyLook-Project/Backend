@@ -113,4 +113,39 @@ router.get('/debug/:userId', async (req, res) => {
   }
 });
 
+router.post('/feedback', async (req, res) => {
+  try {
+    const { userId, storeName, feedbackType } = req.body;
+
+    if (!userId || !storeName || !feedbackType) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    let profile = await UserStyleProfile.findOne({ userId });
+    if (!profile) {
+      profile = new UserStyleProfile({ userId, storeScores: {} });
+    }
+
+    const storeKey = storeName.toLowerCase();
+    
+    let currentScore = profile.storeScores.get(storeKey) || 0;
+
+    if (feedbackType === 'like') {
+      currentScore += 5;
+    } else if (feedbackType === 'dislike') {
+      currentScore -= 5;
+    }
+
+    profile.storeScores.set(storeKey, currentScore);
+    await profile.save();
+
+    res.status(200).json({ success: true, newScore: currentScore });
+  } catch (error) {
+    console.error("Feedback Route Error:", error);
+    res.status(500).json({ error: "Server error processing feedback" });
+  }
+});
+
+
+
 module.exports = router;

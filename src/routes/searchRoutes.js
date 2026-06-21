@@ -147,12 +147,25 @@ router.post('/visual-search', async (req, res) => {
         }
       }
 
-      if (userProfile && userProfile.topStores && userProfile.topStores.length > 0) {
-        const favoriteStores = userProfile.topStores.map(store => store.toLowerCase());
+      // ── Personalization & Dynamic Weighting ─────────────────────────────
+      if (userProfile) {
+        const favoriteStores = userProfile.topStores ? userProfile.topStores.map(s => s.toLowerCase()) : [];
+        const storeScores = userProfile.storeScores || new Map();
 
         products = products.map(product => {
-          const baseScore = product.blendedScore ?? product.searchScore;
-          const boost = favoriteStores.includes((product.storeName || '').toLowerCase()) ? 0.05 : 0;
+          const baseScore = product.blendedScore ?? product.searchScore ?? 0;
+          const pStore = (product.storeName || '').toLowerCase();
+
+          const activeScore = storeScores.get(pStore) || 0;
+          let boost = 0;
+          if (activeScore > 0) {
+            boost = Math.min(activeScore * 0.01, 0.12);
+          } else if (activeScore < 0) {
+            boost = Math.max(activeScore * 0.02, -0.15);
+          } else if (favoriteStores.includes(pStore)) {
+            boost = 0.05;
+          }
+
           return {
             ...product,
             personalizationBoost: boost,
@@ -169,7 +182,6 @@ router.post('/visual-search', async (req, res) => {
         }));
       }
 
-      // חותכים ל-10 התוצאות הטובות ביותר
       products = products.slice(0, 10);
 
       return {
@@ -215,6 +227,7 @@ router.get('/stores', async (req, res) => {
     res.status(500).json({ error: "Failed to fetch stores" });
   }
 });
+
 
 router.get('/fix-db', async (req, res) => {
   try {
