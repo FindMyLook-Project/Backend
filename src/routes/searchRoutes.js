@@ -74,18 +74,12 @@ router.post('/visual-search', async (req, res) => {
       const hasColor = detectedColor && detectedColor !== "other";
       console.log(`🎨 Item ${index} → detectedColor: "${detectedColor}", hasColor: ${hasColor}`);
 
-      const fetchFromMongo = async (minScore, applyColorFilter) => {
-        let matchStage = {
-          searchScore: { $gte: minScore },
+      // Single wide query — no score gate post-filter (ANN ordering is the ranking).
+      // numCandidates at 10x limit ensures good ANN recall before the category pre-filter.
+      const fetchFromMongo = async () => {
+        const matchStage = {
           price: { $lte: Number(filters?.priceRange) || 2000 }
         };
-
-        if (applyColorFilter && hasColor) {
-          // Case-insensitive match: covers "black", "Black", "BLACK" in the DB
-          matchStage.colors = {
-            $elemMatch: { $regex: `^${detectedColor}$`, $options: 'i' }
-          };
-        }
 
         if (filters?.preferredStores && filters.preferredStores.length > 0) {
           matchStage.storeName = { $in: filters.preferredStores };
@@ -97,8 +91,8 @@ router.post('/visual-search', async (req, res) => {
               index: "vector_index",
               path: "imageEmbedding",
               queryVector: embedding,
-              numCandidates: 200,
-              limit: 30,
+              numCandidates: 600,
+              limit: 80,
               filter: { categoryGroup: { $in: allowedCategories } }
             }
           },
@@ -107,23 +101,12 @@ router.post('/visual-search', async (req, res) => {
         ]);
       };
 
-      // Pass 1 – strict: high score + color filter
-      let products = await fetchFromMongo(0.85, true);
+      let products = await fetchFromMongo();
+      console.log(`🔎 Item ${index}: vector search returned ${products.length} candidates`);
 
-      // Pass 2 – relax score threshold but KEEP color filter
-      if (products.length === 0 && hasColor) {
-        console.log(`⚠️ Item ${index}: no results at 0.85 with color. Trying 0.80 + color...`);
-        products = await fetchFromMongo(0.80, true);
-      }
-
-      // Pass 3 – last resort: drop DB color filter (style match only)
-      // The colorTaxonomy post-filter below still enforces incompatibility rules.
-      if (products.length === 0) {
-        console.log(`⚠️ Item ${index}: no results with color filter. Falling back to 0.78 without color...`);
-        products = await fetchFromMongo(0.78, false);
-      }
-
-      // ── Post-filter: remove explicitly incompatible products ─────────────
+      // ── Post-filter: remove only explicitly incompatible colors (colorTaxonomy) ──
+      // This is the sole color hard-gate. It only blocks products that carry an
+      // explicit incompatible tag — untagged or neutral products always pass through.
       if (hasColor) {
         const before = products.length;
         products = products.filter(p => isColorCompatible(detectedColor, p.colors));
@@ -133,14 +116,16 @@ router.post('/visual-search', async (req, res) => {
         }
       }
 
-      // ── Colour re-ranking via CLIP text-image affinity ────────────────────
-      // dot(product.imageEmbedding, colorVector) gives a cross-modal CLIP score
-      // that measures how well each stored product image matches the target colour.
-      // Guard: only run if we have products, a colorVector, and the embeddings
-      // exist in the returned documents. Never produces 0 results.
+      // ── Blended visual + color scoring ───────────────────────────────────────
+      // Replace the old hard 30% cut with a weighted blend so color supports
+      // rather than overrides visual similarity.
+      //
+      // Scale note: colorScore (image×text cosine) clusters ~0.20–0.30 while
+      // searchScore (image×image cosine) clusters ~0.75–0.90. Multiplying
+      // colorScore by 3 normalizes the scales before blending.
       if (hasColor && colorVector.length > 0 && products.length > 0) {
         let anyEmbFound = false;
-        const withColorScore = products.map(p => {
+        products = products.map(p => {
           let colorScore = 0;
           const emb = p.imageEmbedding;
           if (Array.isArray(emb) && emb.length > 0) {
@@ -152,36 +137,26 @@ router.post('/visual-search', async (req, res) => {
         });
 
         if (anyEmbFound) {
-          // Sort by colour affinity, drop bottom 30 % — always keep ≥ 5
-          withColorScore.sort((a, b) => b.colorScore - a.colorScore);
-          const keepCount = Math.max(5, Math.ceil(withColorScore.length * 0.7));
-          // Restore original search-score ordering within the kept set
-          products = withColorScore
-            .slice(0, keepCount)
-            .sort((a, b) => (b.searchScore || 0) - (a.searchScore || 0));
-          console.log(`🎨 Item ${index}: color re-ranking kept ${products.length}/${withColorScore.length} products`);
+          products = products
+            .map(p => ({
+              ...p,
+              blendedScore: 0.80 * p.searchScore + 0.20 * (p.colorScore * 3)
+            }))
+            .sort((a, b) => b.blendedScore - a.blendedScore);
+          console.log(`🎨 Item ${index}: blended visual+color scoring applied (${products.length} products)`);
         }
-        // If no embeddings were found in the documents, skip re-ranking silently
       }
 
       if (userProfile && userProfile.topStores && userProfile.topStores.length > 0) {
         const favoriteStores = userProfile.topStores.map(store => store.toLowerCase());
 
         products = products.map(product => {
-          let boost = 0;
-          let finalScore = product.searchScore;
-          
-          const pStore = product.storeName ? product.storeName.toLowerCase() : "";
-
-          if (favoriteStores.includes(pStore)) {
-            boost = 0.05;
-            finalScore += boost;
-          }
-
+          const baseScore = product.blendedScore ?? product.searchScore;
+          const boost = favoriteStores.includes((product.storeName || '').toLowerCase()) ? 0.05 : 0;
           return {
             ...product,
             personalizationBoost: boost,
-            finalScore: finalScore
+            finalScore: baseScore + boost
           };
         });
 
@@ -190,7 +165,7 @@ router.post('/visual-search', async (req, res) => {
         products = products.map(product => ({
           ...product,
           personalizationBoost: 0,
-          finalScore: product.searchScore
+          finalScore: product.blendedScore ?? product.searchScore
         }));
       }
 
