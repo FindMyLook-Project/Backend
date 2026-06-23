@@ -12,7 +12,8 @@ const userStyleProfileSchema = new mongoose.Schema({
     of: Number,
     default: {}
   },
-  styleVector: { type: [Number], default: [] }, 
+  styleVector: { type: [Number], default: [] },
+  savedItems: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],
   lastUpdated: { type: Date, default: Date.now }
 });
 
