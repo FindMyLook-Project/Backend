@@ -148,4 +148,54 @@ router.post('/feedback', async (req, res) => {
 
 
 
+router.post('/save', async (req, res) => {
+  try {
+    const { userId, productId } = req.body;
+
+    if (!userId || !productId) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    let profile = await UserStyleProfile.findOne({ userId });
+    if (!profile) {
+      profile = new UserStyleProfile({ userId, savedItems: [] });
+    }
+
+    const isSaved = profile.savedItems.some(id => id.toString() === productId);
+
+    if (isSaved) {
+      profile.savedItems = profile.savedItems.filter(id => id.toString() !== productId);
+    } else {
+      profile.savedItems.push(productId);
+    }
+
+    await profile.save();
+
+    res.status(200).json({ success: true, saved: !isSaved, productId });
+  } catch (error) {
+    console.error("Save Route Error:", error);
+    res.status(500).json({ error: "Server error saving product" });
+  }
+});
+
+
+router.get('/saved/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const profile = await UserStyleProfile.findOne({ userId });
+    if (!profile || profile.savedItems.length === 0) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+
+    const products = await Product.find({ _id: { $in: profile.savedItems } });
+
+    res.status(200).json({ success: true, data: products });
+  } catch (error) {
+    console.error("Saved Items Route Error:", error);
+    res.status(500).json({ error: "Server error fetching saved items" });
+  }
+});
+
+
 module.exports = router;
