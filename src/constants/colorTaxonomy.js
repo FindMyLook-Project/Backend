@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Strict color incompatibility rules.
  *
  * For each detected color, lists every DB color label that is visually
@@ -11,7 +11,7 @@
  *     (e.g. black allows navy / dark-grey; navy allows black).
  */
 const COLOR_INCOMPATIBLE = {
-  black:      ['white', 'beige', 'light_blue', 'pink', 'yellow', 'red', 'green'],
+  black:      ['white', 'beige', 'light_blue', 'pink', 'yellow', 'red', 'green', 'grey'],
   white:      ['black', 'navy', 'burgundy', 'olive', 'brown', 'grey'],
   beige:      ['black', 'navy', 'burgundy', 'grey'],
   grey:       ['white', 'beige', 'yellow', 'pink', 'light_blue'],
@@ -20,8 +20,10 @@ const COLOR_INCOMPATIBLE = {
   burgundy:   ['white', 'beige', 'light_blue', 'pink', 'yellow', 'green'],
   brown:      ['white', 'light_blue', 'pink', 'yellow', 'green'],
   olive:      ['white', 'light_blue', 'pink', 'yellow', 'red'],
-  light_blue: ['black', 'navy', 'burgundy', 'olive', 'brown'],
+  light_blue: ['black', 'navy', 'burgundy', 'olive', 'brown', 'grey', 'beige'],
   pink:       ['black', 'navy', 'olive', 'brown'],
+  lavender:   ['black', 'navy', 'olive', 'brown', 'white'],
+  purple:     ['black', 'navy', 'olive', 'brown', 'white', 'yellow'],
   green:      ['burgundy', 'pink', 'red'],
   yellow:     ['black', 'navy', 'burgundy', 'grey', 'brown'],
 };
