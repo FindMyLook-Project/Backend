@@ -1,4 +1,4 @@
-require("dotenv").config();
+require("dotenv").config({ path: require("path").resolve(__dirname, "../.env"), override: true });
 const express = require("express");
 const connectDB = require("./config/db");
 const cors = require("cors");

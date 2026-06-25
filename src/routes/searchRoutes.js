@@ -42,6 +42,12 @@ router.post('/visual-search', async (req, res) => {
       let embedding = [];
       let detectedColor = "";
       let colorVector = [];
+      let contrastColorVector = [];
+      let greyContrastVector = [];
+      let beigeContrastVector = [];
+      let blueContrastVector = [];
+      let styleContrastVector = [];
+      let shoeStyle = "";
       let allowedCategories = LOOK_ALLOWED_CATEGORIES;
 
       try {
@@ -58,6 +64,12 @@ router.post('/visual-search', async (req, res) => {
         embedding = mlItems[0].embedding;
         detectedColor = mlItems[0].color;
         colorVector = mlItems[0].colorVector || [];
+        contrastColorVector = mlItems[0].contrastColorVector || [];
+        greyContrastVector = mlItems[0].greyContrastVector || [];
+        beigeContrastVector = mlItems[0].beigeContrastVector || [];
+        blueContrastVector = mlItems[0].blueContrastVector || [];
+        styleContrastVector = mlItems[0].styleContrastVector || [];
+        shoeStyle = mlItems[0].shoeStyle || "";
 
         const mlCategory = mlItems[0].categoryGroup;
         if (mlCategory && CATEGORY_MAP[mlCategory]) {
@@ -71,21 +83,20 @@ router.post('/visual-search', async (req, res) => {
         return { itemIndex: index, results: [] };
       }
 
-      const hasColor = detectedColor && detectedColor !== "other";
-      console.log(`🎨 Item ${index} → detectedColor: "${detectedColor}", hasColor: ${hasColor}`);
+      // "pattern" skips DB colour taxonomy — but still uses pattern vector re-ranking
+      const isPattern = detectedColor === "pattern";
+      const hasColor = detectedColor && detectedColor !== "other" && !isPattern;
+      const hasColorRerank = colorVector.length > 0 && detectedColor && detectedColor !== "other";
+      const hasStyleRerank = styleContrastVector.length > 0 && !!shoeStyle;
+      const PASTEL_COLORS = new Set(['lavender', 'purple', 'pink']);
+      console.log(`🎨 Item ${index} → detectedColor: "${detectedColor}", hasColor: ${hasColor}, patternRerank: ${isPattern}, shoeStyle: "${shoeStyle || 'none'}"`);
 
-      const fetchFromMongo = async (minScore, applyColorFilter) => {
-        let matchStage = {
-          searchScore: { $gte: minScore },
+      // Single wide query — no score gate post-filter (ANN ordering is the ranking).
+      // numCandidates at 10x limit ensures good ANN recall before the category pre-filter.
+      const fetchFromMongo = async () => {
+        const matchStage = {
           price: { $lte: Number(filters?.priceRange) || 2000 }
         };
-
-        if (applyColorFilter && hasColor) {
-          // Case-insensitive match: covers "black", "Black", "BLACK" in the DB
-          matchStage.colors = {
-            $elemMatch: { $regex: `^${detectedColor}$`, $options: 'i' }
-          };
-        }
 
         if (filters?.preferredStores && filters.preferredStores.length > 0) {
           matchStage.storeName = { $in: filters.preferredStores };
@@ -97,8 +108,8 @@ router.post('/visual-search', async (req, res) => {
               index: "vector_index",
               path: "imageEmbedding",
               queryVector: embedding,
-              numCandidates: 200,
-              limit: 30,
+              numCandidates: 600,
+              limit: 80,
               filter: { categoryGroup: { $in: allowedCategories } }
             }
           },
@@ -107,23 +118,12 @@ router.post('/visual-search', async (req, res) => {
         ]);
       };
 
-      // Pass 1 – strict: high score + color filter
-      let products = await fetchFromMongo(0.85, true);
+      let products = await fetchFromMongo();
+      console.log(`🔎 Item ${index}: vector search returned ${products.length} candidates`);
 
-      // Pass 2 – relax score threshold but KEEP color filter
-      if (products.length === 0 && hasColor) {
-        console.log(`⚠️ Item ${index}: no results at 0.85 with color. Trying 0.80 + color...`);
-        products = await fetchFromMongo(0.80, true);
-      }
-
-      // Pass 3 – last resort: drop DB color filter (style match only)
-      // The colorTaxonomy post-filter below still enforces incompatibility rules.
-      if (products.length === 0) {
-        console.log(`⚠️ Item ${index}: no results with color filter. Falling back to 0.78 without color...`);
-        products = await fetchFromMongo(0.78, false);
-      }
-
-      // ── Post-filter: remove explicitly incompatible products ─────────────
+      // ── Post-filter: remove only explicitly incompatible colors (colorTaxonomy) ──
+      // This is the sole color hard-gate. It only blocks products that carry an
+      // explicit incompatible tag — untagged or neutral products always pass through.
       if (hasColor) {
         const before = products.length;
         products = products.filter(p => isColorCompatible(detectedColor, p.colors));
@@ -133,35 +133,142 @@ router.post('/visual-search', async (req, res) => {
         }
       }
 
-      // ── Colour re-ranking via CLIP text-image affinity ────────────────────
-      // dot(product.imageEmbedding, colorVector) gives a cross-modal CLIP score
-      // that measures how well each stored product image matches the target colour.
-      // Guard: only run if we have products, a colorVector, and the embeddings
-      // exist in the returned documents. Never produces 0 results.
-      if (hasColor && colorVector.length > 0 && products.length > 0) {
+      // ── Blended visual + color scoring ───────────────────────────────────────
+      // Scale note: colorScore (image×text cosine) clusters ~0.20–0.30 while
+      // searchScore (image×image cosine) clusters ~0.75–0.90. Multiplying
+      // colorScore by 3 normalizes the scales before blending.
+      //
+      // MIN_COLOR_SCORE: hard gate based on CLIP semantics, not DB metadata.
+      // Products whose image embedding has < 0.21 cosine similarity with the
+      // color text vector are off-color regardless of what their DB tag says.
+      // 0.20 instead of 0.23 — fashion-clip produces lower absolute colorScores
+      // than ViT-B/32. The relative floor (85% of max) handles per-query calibration.
+      const MIN_COLOR_SCORE = 0.20;
+      const dotEmbedding = (emb, vec) => {
+        if (!Array.isArray(emb) || !Array.isArray(vec) || emb.length === 0 || vec.length === 0) return 0;
+        const len = Math.min(vec.length, emb.length);
+        let score = 0;
+        for (let i = 0; i < len; i++) score += vec[i] * emb[i];
+        return score;
+      };
+
+      if (hasColorRerank && products.length > 0) {
         let anyEmbFound = false;
-        const withColorScore = products.map(p => {
-          let colorScore = 0;
+        const hasContrast = contrastColorVector.length > 0;
+        const hasPastelContrast = greyContrastVector.length > 0;
+        const vectorCandidates = [...products];
+        products = products.map(p => {
           const emb = p.imageEmbedding;
+          let colorScore = 0;
+          let contrastScore = 0;
+          let greyScore = 0;
+          let beigeScore = 0;
+          let blueScore = 0;
+          let styleScore = 0;
           if (Array.isArray(emb) && emb.length > 0) {
             anyEmbFound = true;
-            const len = Math.min(colorVector.length, emb.length);
-            for (let i = 0; i < len; i++) colorScore += colorVector[i] * emb[i];
+            colorScore = dotEmbedding(emb, colorVector);
+            if (hasContrast) contrastScore = dotEmbedding(emb, contrastColorVector);
+            if (greyContrastVector.length) greyScore = dotEmbedding(emb, greyContrastVector);
+            if (beigeContrastVector.length) beigeScore = dotEmbedding(emb, beigeContrastVector);
+            if (blueContrastVector.length) blueScore = dotEmbedding(emb, blueContrastVector);
+            if (hasStyleRerank) styleScore = dotEmbedding(emb, styleContrastVector);
           }
-          return { ...p, colorScore };
+          return { ...p, colorScore, contrastScore, greyScore, beigeScore, blueScore, styleScore };
         });
 
         if (anyEmbFound) {
-          // Sort by colour affinity, drop bottom 30 % — always keep ≥ 5
-          withColorScore.sort((a, b) => b.colorScore - a.colorScore);
-          const keepCount = Math.max(5, Math.ceil(withColorScore.length * 0.7));
-          // Restore original search-score ordering within the kept set
-          products = withColorScore
-            .slice(0, keepCount)
-            .sort((a, b) => (b.searchScore || 0) - (a.searchScore || 0));
-          console.log(`🎨 Item ${index}: color re-ranking kept ${products.length}/${withColorScore.length} products`);
+          const scoredProducts = products;
+          const MIN_RESULTS = 8;
+
+          const applyRelativeThreshold = (pool, relativePct) => {
+            if (pool.length === 0) return pool;
+            const maxColorScore = Math.max(...pool.map(p => p.colorScore));
+            const threshold = Math.max(MIN_COLOR_SCORE, maxColorScore * relativePct);
+            const filtered = pool.filter(p => p.colorScore >= threshold);
+            if (filtered.length >= MIN_RESULTS) return filtered;
+            return [...pool].sort((a, b) => b.colorScore - a.colorScore).slice(0, MIN_RESULTS);
+          };
+
+          const applyPastelContrast = (pool, margins) => pool.filter(p =>
+            p.colorScore >= p.contrastScore + margins.white &&
+            p.colorScore >= p.greyScore + margins.grey &&
+            p.colorScore >= p.beigeScore + margins.beige &&
+            p.colorScore >= p.blueScore + margins.blue
+          );
+
+          // Progressive relaxation: try strict colour gates first, then loosen
+          // until we have enough results. Never return zero when vector search
+          // already found candidates.
+          const tiers = hasStyleRerank ? [
+            { name: 'shoe-style-strict', styleMargin: 0.022, relativePct: 0.90, visualWeight: 0.30 },
+            { name: 'shoe-style-light',  styleMargin: 0.012, relativePct: 0.87, visualWeight: 0.35 },
+            { name: 'shoe-visual',       relativePct: 0.85, visualWeight: 0.50 },
+          ] : isPattern ? [
+            { name: 'pattern-strict', solidMargin: 0.012, relativePct: 0.88, visualWeight: 0.45 },
+            { name: 'pattern-light',  solidMargin: 0.006, relativePct: 0.85, visualWeight: 0.50 },
+            { name: 'pattern-visual', relativePct: 0.85, visualWeight: 0.65 },
+          ] : hasPastelContrast ? [
+            { name: 'strict-pastel', pastel: { white: 0.025, grey: 0.022, beige: 0.022, blue: 0.018 }, relativePct: 0.92, visualWeight: 0.40 },
+            { name: 'medium-pastel', pastel: { white: 0.018, grey: 0.014, beige: 0.014, blue: 0.010 }, relativePct: 0.88, visualWeight: 0.45 },
+            { name: 'light-pastel',  pastel: { white: 0.012, grey: 0.008, beige: 0.008, blue: 0.006 }, relativePct: 0.85, visualWeight: 0.50 },
+            { name: 'white-only',    whiteMargin: 0.015, relativePct: 0.85, visualWeight: 0.55 },
+            { name: 'visual-only',   relativePct: 0.85, visualWeight: 0.65 },
+          ] : hasContrast ? [
+            { name: 'white-contrast', whiteMargin: 0.015, relativePct: 0.85, visualWeight: 0.55 },
+            { name: 'visual-only', relativePct: 0.85, visualWeight: 0.65 },
+          ] : [
+            { name: 'standard', relativePct: 0.85, visualWeight: 0.65 },
+          ];
+
+          let chosenTier = tiers[tiers.length - 1];
+          for (const tier of tiers) {
+            let pool = scoredProducts;
+            if (tier.pastel) {
+              pool = applyPastelContrast(pool, tier.pastel);
+            } else if (tier.styleMargin != null && hasStyleRerank) {
+              pool = pool.filter(p => p.colorScore >= p.styleScore + tier.styleMargin);
+            } else if (tier.solidMargin != null && hasContrast) {
+              pool = pool.filter(p => p.colorScore >= p.contrastScore + tier.solidMargin);
+            } else if (tier.whiteMargin != null) {
+              pool = pool.filter(p => p.colorScore >= p.contrastScore + tier.whiteMargin);
+            }
+            pool = applyRelativeThreshold(pool, tier.relativePct);
+            if (pool.length >= MIN_RESULTS) {
+              products = pool;
+              chosenTier = tier;
+              break;
+            }
+            // Last tier must always win — use whatever we have
+            if (tier === tiers[tiers.length - 1]) {
+              products = pool.length > 0
+                ? pool
+                : [...scoredProducts].sort((a, b) => b.colorScore - a.colorScore).slice(0, MIN_RESULTS);
+              chosenTier = tier;
+            }
+          }
+
+          if (chosenTier.name !== tiers[0].name) {
+            console.log(`🔄 Item ${index}: relaxed colour filter to "${chosenTier.name}" (${products.length} products)`);
+          }
+
+          const visualWeight = chosenTier.visualWeight;
+          const colorWeight = 1 - visualWeight;
+          products = products
+            .map(p => ({
+              ...p,
+              blendedScore: visualWeight * p.searchScore
+                + colorWeight * (p.colorScore * 3)
+                - (hasStyleRerank ? (p.styleScore || 0) * 1.2 : 0)
+            }))
+            .sort((a, b) => b.blendedScore - a.blendedScore);
+          console.log(`🎨 Item ${index}: blended visual+color scoring applied (${products.length} products, tier=${chosenTier.name})`);
         }
-        // If no embeddings were found in the documents, skip re-ranking silently
+
+        if (products.length === 0 && vectorCandidates.length > 0) {
+          console.warn(`⚠️ Item ${index}: colour pipeline returned 0 — falling back to vector order`);
+          products = vectorCandidates.slice(0, 10);
+        }
       }
 
       // ── Personalization & Dynamic Weighting ─────────────────────────────
@@ -170,13 +277,11 @@ router.post('/visual-search', async (req, res) => {
         const storeScores = userProfile.storeScores || new Map();
 
         products = products.map(product => {
-          let boost = 0;
-          let finalScore = product.searchScore || 0;
-          
-          const pStore = product.storeName ? product.storeName.toLowerCase() : "";
-          
-          const activeScore = storeScores.get(pStore) || 0;
+          const baseScore = product.blendedScore ?? product.searchScore ?? 0;
+          const pStore = (product.storeName || '').toLowerCase();
 
+          const activeScore = storeScores.get(pStore) || 0;
+          let boost = 0;
           if (activeScore > 0) {
             boost = Math.min(activeScore * 0.01, 0.12);
           } else if (activeScore < 0) {
@@ -185,12 +290,10 @@ router.post('/visual-search', async (req, res) => {
             boost = 0.05;
           }
 
-          finalScore += boost;
-
           return {
             ...product,
             personalizationBoost: boost,
-            finalScore: finalScore
+            finalScore: baseScore + boost
           };
         });
 
@@ -199,8 +302,44 @@ router.post('/visual-search', async (req, res) => {
         products = products.map(product => ({
           ...product,
           personalizationBoost: 0,
-          finalScore: product.searchScore
+          finalScore: product.blendedScore ?? product.searchScore
         }));
+      }
+
+      // Shoe style queries: rank matching sub-type above birkenstocks/heels/etc.
+      if (hasStyleRerank && products.some(p => p.colorScore != null)) {
+        const stylePriority = (p) => (p.colorScore || 0) - (p.styleScore || 0);
+        products.sort((a, b) => {
+          const byStyle = stylePriority(b) - stylePriority(a);
+          if (Math.abs(byStyle) > 0.001) return byStyle;
+          const byColor = (b.colorScore || 0) - (a.colorScore || 0);
+          if (Math.abs(byColor) > 0.001) return byColor;
+          return (b.finalScore || 0) - (a.finalScore || 0);
+        });
+        console.log(`👡 Item ${index}: shoe style-priority reorder applied (${shoeStyle})`);
+      } else if (isPattern && products.some(p => p.colorScore != null)) {
+        const patternPriority = (p) => (p.colorScore || 0) - (p.contrastScore || 0);
+        products.sort((a, b) => {
+          const byPattern = patternPriority(b) - patternPriority(a);
+          if (Math.abs(byPattern) > 0.001) return byPattern;
+          return (b.finalScore || 0) - (a.finalScore || 0);
+        });
+        console.log(`🌺 Item ${index}: pattern-priority reorder applied`);
+      } else if (PASTEL_COLORS.has(detectedColor) && products.some(p => p.colorScore != null)) {
+        const colorPriority = (p) => p.colorScore - Math.max(
+          p.contrastScore || 0,
+          p.greyScore || 0,
+          p.beigeScore || 0,
+          p.blueScore || 0
+        );
+        products.sort((a, b) => {
+          const byPriority = colorPriority(b) - colorPriority(a);
+          if (Math.abs(byPriority) > 0.001) return byPriority;
+          const byColor = (b.colorScore || 0) - (a.colorScore || 0);
+          if (Math.abs(byColor) > 0.001) return byColor;
+          return (b.finalScore || 0) - (a.finalScore || 0);
+        });
+        console.log(`🌸 Item ${index}: pastel color-priority reorder applied`);
       }
 
       products = products.slice(0, 10);
