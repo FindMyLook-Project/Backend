@@ -12,7 +12,7 @@
  */
 const COLOR_INCOMPATIBLE = {
   black:      ['white', 'beige', 'light_blue', 'pink', 'yellow', 'red', 'green', 'grey', 'brown'],
-  white:      ['black', 'navy', 'burgundy', 'olive', 'brown', 'grey'],
+  white:      ['black', 'navy', 'burgundy', 'olive', 'brown', 'grey', 'red', 'orange', 'tan', 'yellow', 'pink'],
   beige:      ['black', 'navy', 'burgundy', 'grey'],
   grey:       ['white', 'beige', 'yellow', 'pink', 'light_blue'],
   navy:       ['white', 'beige', 'light_blue', 'yellow', 'pink', 'red'],
