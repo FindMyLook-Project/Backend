@@ -10,7 +10,8 @@ const profileRoutes = require("./routes/profileRoutes");
 const app = express();
 
 const allowedOrigins = [
-  "http://localhost:5173"
+  "http://localhost:5173",
+  "https://findmylook.cs.colman.ac.il"
 ];
 
 app.use(cors({
