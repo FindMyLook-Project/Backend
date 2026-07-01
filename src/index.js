@@ -1,17 +1,26 @@
-require("dotenv").config({ path: require("path").resolve(__dirname, "../.env"), override: true });
+require("dotenv").config({ path: require("path").resolve(__dirname, "../.env") });
 const express = require("express");
 const connectDB = require("./config/db");
 const cors = require("cors");
 const searchRoutes = require("./routes/searchRoutes");
 const authRoutes = require("./routes/authRoutes");
 const productRoutes = require("./routes/productRoutes");
-
 const profileRoutes = require("./routes/profileRoutes"); 
 
 const app = express();
 
+const allowedOrigins = [
+  "http://localhost:5173"
+];
+
 app.use(cors({
-    origin: "*", 
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    }, 
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"]
 }));
