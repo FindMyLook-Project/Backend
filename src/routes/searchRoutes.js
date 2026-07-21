@@ -2,7 +2,9 @@ const express = require('express');
 const router = express.Router();
 const Product = require('../models/productModel');
 const Store = require('../models/storeModel'); 
-const axios = require('axios'); 
+const axios = require('axios');
+const { filterValidProducts } = require('../utils/validateProducts');
+const VALIDATE_PRODUCTS = process.env.VALIDATE_PRODUCTS === 'true';
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 const ML_PROCESS_LOOK_ENDPOINT =
   process.env.ML_URL ||
@@ -73,7 +75,7 @@ router.post('/visual-search', async (req, res) => {
             path: "imageEmbedding",
             queryVector: embedding,
             numCandidates: 200,
-            limit: 10,
+            limit: 40,
             filter: { categoryGroup: { $in: allowedCategories } }
           }
         },
@@ -101,7 +103,7 @@ router.post('/visual-search', async (req, res) => {
               path: "imageEmbedding",
               queryVector: embedding,
               numCandidates: 200,
-              limit: 10,
+              limit: 40,
               filter: { categoryGroup: { $in: allowedCategories } }
             }
           },
@@ -116,6 +118,12 @@ router.post('/visual-search', async (req, res) => {
             }
           }
         ]);
+      }
+
+      if (VALIDATE_PRODUCTS) {
+        products = await filterValidProducts(products, { limit: 20 });
+      } else {
+        products = products.slice(0, 20);
       }
 
       return {
