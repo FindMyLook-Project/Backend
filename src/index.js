@@ -7,8 +7,20 @@ const authRoutes = require("./routes/authRoutes");
 
 const app = express();
 
+const ALLOWED_ORIGINS = [
+    "http://findmylook.cs.colman.ac.il",
+    "https://findmylook.cs.colman.ac.il",
+    "http://193.106.55.155", // raw IP, kept during the domain migration
+];
+
 app.use(cors({
-    origin: "*", 
+    origin: (origin, callback) => {
+        if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error("Not allowed by CORS"));
+        }
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"]
 }));
