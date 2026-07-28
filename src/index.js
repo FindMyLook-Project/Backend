@@ -11,6 +11,7 @@ const ALLOWED_ORIGINS = [
     "http://findmylook.cs.colman.ac.il",
     "https://findmylook.cs.colman.ac.il",
     "http://193.106.55.155", // raw IP, kept during the domain migration
+    "http://localhost:5173", // local frontend dev server, for testing against the real server
 ];
 
 app.use(cors({
