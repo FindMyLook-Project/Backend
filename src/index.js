@@ -11,7 +11,9 @@ const app = express();
 
 const allowedOrigins = [
   "http://localhost:5173",
-  "https://findmylook.cs.colman.ac.il"
+  "http://findmylook.cs.colman.ac.il",
+  "https://findmylook.cs.colman.ac.il",
+  "http://193.106.55.155"
 ];
 
 app.use(cors({
