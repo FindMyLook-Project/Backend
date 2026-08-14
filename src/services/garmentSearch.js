@@ -1,5 +1,8 @@
 const Product = require('../models/productModel');
 const { isColorCompatible } = require('../constants/colorTaxonomy');
+const { filterValidProducts } = require('../utils/validateProducts');
+
+const VALIDATE_PRODUCTS = process.env.VALIDATE_PRODUCTS === 'true';
 
 const CATEGORY_MAP = {
   top:    ['tops', 'blouses', 'bodysuits', 'coats', 'jackets', 'knitwear', 'outerwear', 'sweatshirts', 'basics', 'casual', 'activewear'],
@@ -455,6 +458,11 @@ async function searchProductsFromMlItem(mlItem, filters, userProfile, logLabel =
       p.contrastScore || 0, p.greyScore || 0, p.beigeScore || 0, p.blueScore || 0
     );
     products.sort((a, b) => colorPriority(b) - colorPriority(a));
+  }
+
+  if (VALIDATE_PRODUCTS) {
+    const candidates = products.slice(0, 20);
+    return filterValidProducts(candidates, { limit: 10 });
   }
 
   return products.slice(0, 10);
