@@ -1,6 +1,6 @@
 const axios = require("axios");
 
-const DEFAULT_TIMEOUT_MS = 1200;
+const DEFAULT_TIMEOUT_MS = 1500;
 const CACHE_TTL_MS = 7 * 60 * 1000; // 7 minutes
 
 // Some stores' WAF/CDN slow-paths requests carrying axios's default
