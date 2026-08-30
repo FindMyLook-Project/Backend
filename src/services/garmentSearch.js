@@ -178,6 +178,7 @@ async function searchProductsFromMlItem(mlItem, filters, userProfile, logLabel =
 
   let products = await fetchFromMongo();
   console.log(`${logLabel} vector search returned ${products.length} candidates`);
+  const rawVectorResults = [...products];
 
   if (mlCategory === 'top') {
     const before = products.length;
@@ -412,9 +413,12 @@ async function searchProductsFromMlItem(mlItem, filters, userProfile, logLabel =
       console.log(`${logLabel} blended scoring tier=${chosenTier.name}`);
     }
 
-    if (products.length === 0 && vectorCandidates.length > 0) {
-      products = vectorCandidates.slice(0, 10);
-    }
+    if (products.length === 0 && rawVectorResults.length > 0) {
+    console.log(`${logLabel} Strict filters removed all products. Falling back to raw vector similarity.`);
+    products = rawVectorResults.slice(0, 10).map(p => ({ ...p, isAlternativeMatch: true }));
+  } else {
+    products = products.map(p => ({ ...p, isAlternativeMatch: false }));
+  }
   }
 
   if (userProfile) {
