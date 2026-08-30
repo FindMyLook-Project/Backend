@@ -48,14 +48,30 @@ router.post('/visual-search', async (req, res) => {
           return { itemIndex: index, results: [] };
         }
 
+        const mlItem = mlItems[0];
+
         const results = await searchProductsFromMlItem(
-          mlItems[0],
+          mlItem,
           filters,
           userProfile,
           `[Item ${index}]`
         );
 
-        return { itemIndex: index, results };
+        return {
+          itemIndex: index,
+          detected: {
+            categoryGroup: mlItem.categoryGroup || null,
+            category: mlItem.category || null,
+            color: mlItem.color || null,
+            fabricGroup: mlItem.fabricGroup || null,
+            confidence: mlItem.confidence || null,
+            shoeStyle: mlItem.shoeStyle || null,
+            topStyle: mlItem.topStyle || null,
+            isStripe: mlItem.isStripe || false,
+            bottomLength: mlItem.bottomLength || null,
+          },
+          results,
+        };
       } catch (mlErr) {
         console.error(`ML Service Error on item ${index}:`, mlErr.message);
         return { itemIndex: index, results: [] };
